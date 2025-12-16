@@ -243,3 +243,5 @@ This repository bundles the [DeepReview](./deepreview/README.md) CLI and a GitHu
 
 Artifacts (JSON, SARIF, metadata, repro scripts) are uploaded as deepreview-results after each run.
 
+
+- DeepReview workflow 会先用 git diff --name-only（基于 origin/master 或 PR base）收集 Python 变更，仅把这些文件交给 LLM；若没有 Python 变更，则自动退回完整 diff。

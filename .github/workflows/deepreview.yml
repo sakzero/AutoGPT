@@ -19,6 +19,27 @@ jobs:
         working-directory: deepreview
         run: uv sync
 
+      - name: Collect changed Python files
+        id: diff
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+            git fetch origin "${{ github.event.pull_request.base.ref }}"
+          else
+            BASE_REF="origin/master"
+            git fetch origin master
+          fi
+          echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+          git diff --name-only "$BASE_REF"...HEAD \
+            | grep '\.[pP]y$' > changed_files.txt || true
+          if [ ! -s changed_files.txt ]; then
+            echo "No Python changes detected; falling back to diff."
+          else
+            echo "Changed files:"
+            cat changed_files.txt
+          fi
+
       - name: Check NVIDIA_API_KEY presence
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -34,11 +55,13 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}/deepreview/src
+          BASE_REF: ${{ steps.diff.outputs.base_ref }}
         run: |
           mkdir -p artifacts
           uv run python -m deepreview.cli .. \
             --scan-mode standard \
-            --diff-target origin/main \
+            --diff-target "${BASE_REF:-origin/master}" \
+            --changed-files-list ../changed_files.txt \
             --metadata-path artifacts/run_meta.json \
             --archive-run artifacts/deepreview-run.zip
 
