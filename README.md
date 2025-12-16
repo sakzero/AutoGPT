@@ -1,17 +1,17 @@
-# AutoGPT: Build, Deploy, and Run AI Agents
+﻿# AutoGPT: Build, Deploy, and Run AI Agents
 
 [![Discord Follow](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2Fautogpt%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=total%20members&logo=discord&logoColor=white&color=7289da)](https://discord.gg/autogpt) &ensp;
 [![Twitter Follow](https://img.shields.io/twitter/follow/Auto_GPT?style=social)](https://twitter.com/Auto_GPT) &ensp;
 
 <!-- Keep these links. Translations will automatically update with the README. -->
 [Deutsch](https://zdoc.app/de/Significant-Gravitas/AutoGPT) | 
-[Español](https://zdoc.app/es/Significant-Gravitas/AutoGPT) | 
-[français](https://zdoc.app/fr/Significant-Gravitas/AutoGPT) | 
-[日本語](https://zdoc.app/ja/Significant-Gravitas/AutoGPT) | 
-[한국어](https://zdoc.app/ko/Significant-Gravitas/AutoGPT) | 
-[Português](https://zdoc.app/pt/Significant-Gravitas/AutoGPT) | 
-[Русский](https://zdoc.app/ru/Significant-Gravitas/AutoGPT) | 
-[中文](https://zdoc.app/zh/Significant-Gravitas/AutoGPT)
+[Espa帽ol](https://zdoc.app/es/Significant-Gravitas/AutoGPT) | 
+[fran莽ais](https://zdoc.app/fr/Significant-Gravitas/AutoGPT) | 
+[鏃ユ湰瑾瀅(https://zdoc.app/ja/Significant-Gravitas/AutoGPT) | 
+[頃滉淡鞏碷(https://zdoc.app/ko/Significant-Gravitas/AutoGPT) | 
+[Portugu锚s](https://zdoc.app/pt/Significant-Gravitas/AutoGPT) | 
+[袪褍褋褋泻懈泄](https://zdoc.app/ru/Significant-Gravitas/AutoGPT) | 
+[涓枃](https://zdoc.app/zh/Significant-Gravitas/AutoGPT)
 
 **AutoGPT** is a powerful platform that allows you to create, deploy, and manage continuous AI agents that automate complex workflows. 
 
@@ -54,14 +54,14 @@ Before proceeding with the installation, ensure your system meets the following 
 ### Updated Setup Instructions:
 We've moved to a fully maintained and regularly updated documentation site.
 
-👉 [Follow the official self-hosting guide here](https://docs.agpt.co/platform/getting-started/)
+馃憠 [Follow the official self-hosting guide here](https://docs.agpt.co/platform/getting-started/)
 
 
 This tutorial assumes you have Docker, VSCode, git and npm installed.
 
 ---
 
-#### ⚡ Quick Setup with One-Line Script (Recommended for Local Hosting)
+#### 鈿?Quick Setup with One-Line Script (Recommended for Local Hosting)
 
 Skip the manual steps and get started in minutes using our automatic setup script.
 
@@ -75,9 +75,9 @@ For Windows (PowerShell):
 powershell -c "iwr https://setup.agpt.co/install.bat -o install.bat; ./install.bat"
 ```
 
-This will install dependencies, configure Docker, and launch your local instance — all in one go.
+This will install dependencies, configure Docker, and launch your local instance 鈥?all in one go.
 
-### 🧱 AutoGPT Frontend
+### 馃П AutoGPT Frontend
 
 The AutoGPT frontend is where users interact with our powerful AI automation platform. It offers multiple ways to engage with and leverage our AI agents. This is the interface where you'll bring your AI automation ideas to life:
 
@@ -95,7 +95,7 @@ The AutoGPT frontend is where users interact with our powerful AI automation pla
 
 [Read this guide](https://docs.agpt.co/platform/new_blocks/) to learn how to build your own custom blocks.
 
-### 💽 AutoGPT Server
+### 馃捊 AutoGPT Server
 
 The AutoGPT Server is the powerhouse of our platform This is where your agents run. Once deployed, agents can be triggered by external sources and can operate continuously. It contains all the essential components that make AutoGPT run smoothly.
 
@@ -105,7 +105,7 @@ The AutoGPT Server is the powerhouse of our platform This is where your agents r
    
    **Marketplace:** A comprehensive marketplace where you can find and deploy a wide range of pre-built agents.
 
-### 🐙 Example Agents
+### 馃悪 Example Agents
 
 Here are two examples of what you can do with AutoGPT:
 
@@ -126,52 +126,52 @@ These examples show just a glimpse of what you can achieve with AutoGPT! You can
 
 ### **License Overview:**
 
-🛡️ **Polyform Shield License:**
+馃洝锔?**Polyform Shield License:**
 All code and content within the `autogpt_platform` folder is licensed under the Polyform Shield License. This new project is our in-developlemt platform for building, deploying and managing agents.</br>_[Read more about this effort](https://agpt.co/blog/introducing-the-autogpt-platform)_
 
-🦉 **MIT License:**
+馃 **MIT License:**
 All other portions of the AutoGPT repository (i.e., everything outside the `autogpt_platform` folder) are licensed under the MIT License. This includes the original stand-alone AutoGPT Agent, along with projects such as [Forge](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/forge), [agbenchmark](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/benchmark) and the [AutoGPT Classic GUI](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/frontend).</br>We also publish additional work under the MIT Licence in other repositories, such as [GravitasML](https://github.com/Significant-Gravitas/gravitasml) which is developed for and used in the AutoGPT Platform. See also our MIT Licenced [Code Ability](https://github.com/Significant-Gravitas/AutoGPT-Code-Ability) project.
 
 ---
 ### Mission
 Our mission is to provide the tools, so that you can focus on what matters:
 
-- 🏗️ **Building** - Lay the foundation for something amazing.
-- 🧪 **Testing** - Fine-tune your agent to perfection.
-- 🤝 **Delegating** - Let AI work for you, and have your ideas come to life.
+- 馃彈锔?**Building** - Lay the foundation for something amazing.
+- 馃И **Testing** - Fine-tune your agent to perfection.
+- 馃 **Delegating** - Let AI work for you, and have your ideas come to life.
 
 Be part of the revolution! **AutoGPT** is here to stay, at the forefront of AI innovation.
 
-**📖 [Documentation](https://docs.agpt.co)**
+**馃摉 [Documentation](https://docs.agpt.co)**
 &ensp;|&ensp;
-**🚀 [Contributing](CONTRIBUTING.md)**
+**馃殌 [Contributing](CONTRIBUTING.md)**
 
 ---
-## 🤖 AutoGPT Classic
+## 馃 AutoGPT Classic
 > Below is information about the classic version of AutoGPT.
 
-**🛠️ [Build your own Agent - Quickstart](classic/FORGE-QUICKSTART.md)**
+**馃洜锔?[Build your own Agent - Quickstart](classic/FORGE-QUICKSTART.md)**
 
-### 🏗️ Forge
+### 馃彈锔?Forge
 
 **Forge your own agent!** &ndash; Forge is a ready-to-go toolkit to build your own agent application. It handles most of the boilerplate code, letting you channel all your creativity into the things that set *your* agent apart. All tutorials are located [here](https://medium.com/@aiedge/autogpt-forge-e3de53cc58ec). Components from [`forge`](/classic/forge/) can also be used individually to speed up development and reduce boilerplate in your agent project.
 
-🚀 [**Getting Started with Forge**](https://github.com/Significant-Gravitas/AutoGPT/blob/master/classic/forge/tutorials/001_getting_started.md) &ndash;
+馃殌 [**Getting Started with Forge**](https://github.com/Significant-Gravitas/AutoGPT/blob/master/classic/forge/tutorials/001_getting_started.md) &ndash;
 This guide will walk you through the process of creating your own agent and using the benchmark and user interface.
 
-📘 [Learn More](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/forge) about Forge
+馃摌 [Learn More](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/forge) about Forge
 
-### 🎯 Benchmark
+### 馃幆 Benchmark
 
 **Measure your agent's performance!** The `agbenchmark` can be used with any agent that supports the agent protocol, and the integration with the project's [CLI] makes it even easier to use with AutoGPT and forge-based agents. The benchmark offers a stringent testing environment. Our framework allows for autonomous, objective performance evaluations, ensuring your agents are primed for real-world action.
 
 <!-- TODO: insert visual demonstrating the benchmark -->
 
-📦 [`agbenchmark`](https://pypi.org/project/agbenchmark/) on Pypi
+馃摝 [`agbenchmark`](https://pypi.org/project/agbenchmark/) on Pypi
 &ensp;|&ensp;
-📘 [Learn More](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/benchmark) about the Benchmark
+馃摌 [Learn More](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/benchmark) about the Benchmark
 
-### 💻 UI
+### 馃捇 UI
 
 **Makes agents easy to use!** The `frontend` gives you a user-friendly interface to control and monitor your agents. It connects to agents through the [agent protocol](#-agent-protocol), ensuring compatibility with many agents from both inside and outside of our ecosystem.
 
@@ -179,9 +179,9 @@ This guide will walk you through the process of creating your own agent and usin
 
 The frontend works out-of-the-box with all agents in the repo. Just use the [CLI] to run your agent of choice!
 
-📘 [Learn More](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/frontend) about the Frontend
+馃摌 [Learn More](https://github.com/Significant-Gravitas/AutoGPT/tree/master/classic/frontend) about the Frontend
 
-### ⌨️ CLI
+### 鈱笍 CLI
 
 [CLI]: #-cli
 
@@ -202,17 +202,17 @@ Commands:
 
 Just clone the repo, install dependencies with `./run setup`, and you should be good to go!
 
-## 🤔 Questions? Problems? Suggestions?
+## 馃 Questions? Problems? Suggestions?
 
-### Get help - [Discord 💬](https://discord.gg/autogpt)
+### Get help - [Discord 馃挰](https://discord.gg/autogpt)
 
 [![Join us on Discord](https://invidget.switchblade.xyz/autogpt)](https://discord.gg/autogpt)
 
 To report a bug or request a feature, create a [GitHub Issue](https://github.com/Significant-Gravitas/AutoGPT/issues/new/choose). Please ensure someone else hasn't created an issue for the same topic.
 
-## 🤝 Sister projects
+## 馃 Sister projects
 
-### 🔄 Agent Protocol
+### 馃攧 Agent Protocol
 
 To maintain a uniform standard and ensure seamless compatibility with many current and future applications, AutoGPT employs the [agent protocol](https://agentprotocol.ai/) standard by the AI Engineer Foundation. This standardizes the communication pathways from your agent to the frontend and benchmark.
 
@@ -231,8 +231,15 @@ To maintain a uniform standard and ensure seamless compatibility with many curre
 </p>
 
 
-## ⚡ Contributors
+## 鈿?Contributors
 
 <a href="https://github.com/Significant-Gravitas/AutoGPT/graphs/contributors" alt="View Contributors">
   <img src="https://contrib.rocks/image?repo=Significant-Gravitas/AutoGPT&max=1000&columns=10" alt="Contributors" />
 </a>
+
+## Security Audits with DeepReview
+
+This repository bundles the [DeepReview](./deepreview/README.md) CLI and a GitHub Actions workflow (deepreview-audit) that statically reviews Python code on every push/PR. To enable LLM-assisted findings, provide NVIDIA_API_KEY in the repository secrets; otherwise DeepReview仍会以静态启发式输出结果。
+
+Artifacts (JSON, SARIF, metadata, repro scripts) are uploaded as deepreview-results after each run.
+

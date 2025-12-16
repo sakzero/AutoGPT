@@ -1,0 +1,42 @@
+﻿name: deepreview-audit
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install DeepReview dependencies
+        working-directory: deepreview
+        run: uv sync
+
+      - name: Run DeepReview audit
+        working-directory: deepreview
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          mkdir -p artifacts
+          uv run python -m deepreview.cli .. \
+            --scan-mode standard \
+            --diff-target origin/main \
+            --metadata-path artifacts/run_meta.json \
+            --archive-run artifacts/deepreview-run.zip
+
+      - name: Upload DeepReview artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepreview-results
+          path: |
+            deepreview/deepreview_report.json
+            deepreview/deepreview_report.sarif
+            deepreview/artifacts/run_meta.json
+            deepreview/artifacts/deepreview-run.zip
