@@ -19,6 +19,16 @@ jobs:
         working-directory: deepreview
         run: uv sync
 
+      - name: Check NVIDIA_API_KEY presence
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          if [ -z "${NVIDIA_API_KEY}" ]; then
+            echo "NVIDIA_API_KEY missing in workflow context"
+            exit 1
+          else
+            echo "NVIDIA_API_KEY detected"
+          fi
       - name: Run DeepReview audit
         working-directory: deepreview
         env:
@@ -41,5 +51,7 @@ jobs:
             deepreview/deepreview_report.sarif
             deepreview/artifacts/run_meta.json
             deepreview/artifacts/deepreview-run.zip
+
+
 
 
