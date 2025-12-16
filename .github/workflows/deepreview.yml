@@ -23,6 +23,7 @@ jobs:
         working-directory: deepreview
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          PYTHONPATH: ${{ github.workspace }}/deepreview/src
         run: |
           mkdir -p artifacts
           uv run python -m deepreview.cli .. \
@@ -40,3 +41,5 @@ jobs:
             deepreview/deepreview_report.sarif
             deepreview/artifacts/run_meta.json
             deepreview/artifacts/deepreview-run.zip
+
+
