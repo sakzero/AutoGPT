@@ -348,16 +348,37 @@ def _chunk_diff_sections(
     return chunks
 
 
-def _prepare_llm_chunks(diff_text: str, changed_files: list[str]) -> list[DiffChunk]:
+def _prepare_llm_chunks(
+    diff_text: str,
+    changed_files: list[str],
+    analysis_source: str,
+) -> tuple[list[DiffChunk], int, bool]:
     sections = _split_diff_sections(diff_text)
     if not sections and diff_text and diff_text.strip():
         sections = [DiffSection(text=diff_text.strip(), files=sorted(set(changed_files)))]
-    return _chunk_diff_sections(sections, Config.LLM_DIFF_CHUNK_CHARS, Config.LLM_DIFF_MAX_SECTIONS)
+    chunks = _chunk_diff_sections(sections, Config.LLM_DIFF_CHUNK_CHARS, Config.LLM_DIFF_MAX_SECTIONS)
+    original_count = len(chunks)
+    truncated = False
+
+    max_chunks = Config.LLM_MAX_CHUNKS if Config.LLM_MAX_CHUNKS > 0 else None
+    if analysis_source == "snapshot":
+        snapshot_limit = Config.LLM_MAX_SNAPSHOT_CHUNKS if Config.LLM_MAX_SNAPSHOT_CHUNKS > 0 else None
+        if snapshot_limit is not None:
+            max_chunks = snapshot_limit if max_chunks is None else min(max_chunks, snapshot_limit)
+
+    if max_chunks is not None and original_count > max_chunks:
+        print(f"[LLM] Diff spans {original_count} chunk(s); trimming to first {max_chunks}.")
+        chunks = chunks[:max_chunks]
+        truncated = True
+
+    return chunks, original_count, truncated
 
 
 def _perform_llm_review(
     llm_client: LLMClient,
     diff_chunks: list[DiffChunk],
+    available_chunk_count: int,
+    chunks_truncated: bool,
     full_diff_text: str,
     full_context_text: str,
     context_manager: CodeContextManager,
@@ -379,6 +400,15 @@ def _perform_llm_review(
             max_findings=max_findings,
         )
         response.setdefault("chunks", [])
+        response.setdefault("chunks", [])
+        response.setdefault(
+            "chunk_overview",
+            {
+                "processed": len(diff_chunks),
+                "available": available_chunk_count,
+                "truncated": chunks_truncated,
+            },
+        )
         return response
 
     if not diff_chunks:
@@ -387,6 +417,11 @@ def _perform_llm_review(
             "insights": [],
             "findings": [],
             "chunks": [],
+            "chunk_overview": {
+                "processed": 0,
+                "available": 0,
+                "truncated": False,
+            },
         }
 
     combined_findings: list[dict[str, Any]] = []
@@ -401,9 +436,11 @@ def _perform_llm_review(
             {
                 "chunk_index": idx,
                 "chunk_total": total_chunks,
+                "chunk_available": available_chunk_count,
                 "chunk_section_count": chunk.section_count,
                 "chunk_file_count": len(chunk.files),
                 "chunk_diff_bytes": chunk.diff_bytes,
+                "chunks_truncated": chunks_truncated,
             }
         )
         chunk_context = context_manager.retrieve_context(chunk.text, include_paths=chunk.files or None)
@@ -438,6 +475,11 @@ def _perform_llm_review(
         "insights": combined_insights,
         "findings": combined_findings,
         "chunks": chunk_stats,
+        "chunk_overview": {
+            "processed": total_chunks,
+            "available": available_chunk_count,
+            "truncated": chunks_truncated,
+        },
     }
 
 
@@ -887,11 +929,15 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
 
         preset = SCAN_MODE_PRESETS.get(opts.scan_mode, SCAN_MODE_PRESETS["standard"])
         llm_client = LLMClient(max_retries=opts.llm_retries)
-        diff_chunks = _prepare_llm_chunks(diff_text, changed_files)
+        diff_chunks, chunk_available_count, chunk_truncated = _prepare_llm_chunks(
+            diff_text, changed_files, analysis_source
+        )
         with PhaseContext(state, "llm_review"):
             llm_response = _perform_llm_review(
                 llm_client=llm_client,
                 diff_chunks=diff_chunks,
+                available_chunk_count=chunk_available_count,
+                chunks_truncated=chunk_truncated,
                 full_diff_text=diff_text,
                 full_context_text=context_text,
                 context_manager=context_manager,
@@ -933,6 +979,11 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
         artifacts.update(summary_artifacts)
 
         llm_chunks = llm_response.get("chunks") or []
+        chunk_overview = llm_response.get("chunk_overview") or {
+            "processed": len(llm_chunks),
+            "available": len(llm_chunks),
+            "truncated": False,
+        }
         counts = {
             "llm": len(llm_findings),
             "audit": len(audit_findings),
@@ -951,7 +1002,7 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
                 "diff_bytes": len(diff_text or ""),
                 "context_bytes": len(context_text or ""),
                 "changed_file_count": len(changed_files),
-                "chunk_count": len(llm_chunks),
+                "chunk_count": chunk_overview.get("processed", len(llm_chunks)),
             },
             "suppression": {
                 "patterns": suppress_patterns,
@@ -970,9 +1021,13 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
             "diff_target": getattr(opts, "diff_target", None),
             "quality_tools": ["ruff", "bandit"],
             "llm_chunking": {
-                "chunk_count": len(llm_chunks),
+                "processed_chunks": chunk_overview.get("processed", len(llm_chunks)),
+                "available_chunks": chunk_overview.get("available", len(llm_chunks)),
+                "chunks_truncated": chunk_overview.get("truncated", False),
                 "chunk_char_limit": Config.LLM_DIFF_CHUNK_CHARS,
                 "chunk_section_limit": Config.LLM_DIFF_MAX_SECTIONS,
+                "max_chunks": Config.LLM_MAX_CHUNKS,
+                "max_snapshot_chunks": Config.LLM_MAX_SNAPSHOT_CHUNKS,
             },
             "llm_chunks": llm_chunks,
         }

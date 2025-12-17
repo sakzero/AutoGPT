@@ -24,6 +24,8 @@ class Config:
     AUTOMATION_MAX_ITERATIONS = int(os.getenv("AUTOMATION_MAX_ITERATIONS", "50"))
     LLM_DIFF_CHUNK_CHARS = int(os.getenv("LLM_DIFF_CHUNK_CHARS", "200000"))
     LLM_DIFF_MAX_SECTIONS = int(os.getenv("LLM_DIFF_MAX_SECTIONS", "20"))
+    LLM_MAX_CHUNKS = int(os.getenv("LLM_MAX_CHUNKS", "12"))
+    LLM_MAX_SNAPSHOT_CHUNKS = int(os.getenv("LLM_MAX_SNAPSHOT_CHUNKS", "4"))
     HEURISTIC_SCAN_CONTEXT = os.getenv("HEURISTIC_SCAN_CONTEXT", "0") not in {"0", "false", "False", ""}
 
     # App Settings
