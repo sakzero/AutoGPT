@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Sequence
@@ -37,6 +38,20 @@ SCAN_MODE_PRESETS = {
 
 SEVERITY_LEVELS = ("critical", "high", "medium", "low", "info")
 REPRO_ATTEMPT_LIMIT = 3
+
+
+@dataclass
+class DiffSection:
+    text: str
+    files: list[str]
+
+
+@dataclass
+class DiffChunk:
+    text: str
+    files: list[str]
+    section_count: int
+    diff_bytes: int
 
 
 def _default_run_name() -> str:
@@ -195,6 +210,235 @@ def _collect_changed_paths(opts: argparse.Namespace, repo_path: str) -> list[str
     if normalized:
         print(f"[Git] Incremental scan limited to {len(normalized)} file(s).")
     return normalized
+
+
+def _is_section_boundary(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return (
+        stripped.startswith("diff --git ")
+        or stripped.startswith("--- Untracked File:")
+        or stripped.startswith("--- File:")
+    )
+
+
+def _extract_paths_from_line(line: str) -> list[str]:
+    stripped = line.strip()
+    candidates: list[str] = []
+    if stripped.startswith("+++ b/"):
+        candidates.append(stripped[6:])
+    elif stripped.startswith("diff --git "):
+        parts = stripped.split()
+        if len(parts) >= 4 and parts[3].startswith("b/"):
+            candidates.append(parts[3][2:])
+    elif stripped.startswith("--- File:"):
+        candidates.append(stripped.split(":", 1)[1].strip())
+    elif stripped.startswith("--- Untracked File:"):
+        candidates.append(stripped.split(":", 1)[1].strip())
+    cleaned = []
+    for candidate in candidates:
+        entry = candidate.strip().replace("\\", "/")
+        if entry and entry != "/dev/null":
+            cleaned.append(entry)
+    return cleaned
+
+
+def _split_diff_sections(diff_text: str) -> list[DiffSection]:
+    if not diff_text or not diff_text.strip():
+        return []
+    sections: list[DiffSection] = []
+    preamble: list[str] = []
+    buffer: list[str] = []
+    files: set[str] = set()
+    started = False
+
+    def _flush() -> None:
+        nonlocal buffer, files
+        if buffer:
+            text = "\n".join(buffer).strip()
+            if text:
+                sections.append(DiffSection(text=text, files=sorted(files)))
+        buffer = []
+        files = set()
+
+    for raw_line in diff_text.splitlines():
+        boundary = _is_section_boundary(raw_line)
+        if not started:
+            if boundary:
+                buffer = preamble + [raw_line]
+                files = set(_extract_paths_from_line(raw_line))
+                preamble = []
+                started = True
+            else:
+                preamble.append(raw_line)
+            continue
+
+        if boundary:
+            _flush()
+            buffer = [raw_line]
+            files = set(_extract_paths_from_line(raw_line))
+            continue
+
+        buffer.append(raw_line)
+        for entry in _extract_paths_from_line(raw_line):
+            files.add(entry)
+
+    if started:
+        _flush()
+    elif preamble:
+        text = "\n".join(preamble).strip()
+        if text:
+            sections.append(DiffSection(text=text, files=[]))
+    return sections
+
+
+def _chunk_diff_sections(
+    sections: list[DiffSection],
+    max_chars: int,
+    max_sections: int,
+) -> list[DiffChunk]:
+    if not sections:
+        return []
+    chunks: list[DiffChunk] = []
+    buffer: list[str] = []
+    files: set[str] = set()
+    char_budget = max_chars if max_chars > 0 else None
+    section_limit = max_sections if max_sections > 0 else None
+    accumulated_chars = 0
+    accumulated_sections = 0
+
+    def _flush() -> None:
+        nonlocal buffer, files, accumulated_chars, accumulated_sections
+        if not buffer:
+            return
+        text = "\n\n".join(buffer).strip()
+        if text:
+            chunks.append(
+                DiffChunk(
+                    text=text,
+                    files=sorted(files),
+                    section_count=accumulated_sections,
+                    diff_bytes=len(text),
+                )
+            )
+        buffer = []
+        files = set()
+        accumulated_chars = 0
+        accumulated_sections = 0
+
+    for section in sections:
+        if not section.text.strip():
+            continue
+        section_len = len(section.text) + 2
+        should_flush = False
+        if buffer:
+            if char_budget and (accumulated_chars + section_len) > char_budget:
+                should_flush = True
+            if section_limit and accumulated_sections >= section_limit:
+                should_flush = True
+        if should_flush:
+            _flush()
+        buffer.append(section.text)
+        accumulated_chars += section_len
+        accumulated_sections += 1
+        files.update(section.files)
+
+    _flush()
+    return chunks
+
+
+def _prepare_llm_chunks(diff_text: str, changed_files: list[str]) -> list[DiffChunk]:
+    sections = _split_diff_sections(diff_text)
+    if not sections and diff_text and diff_text.strip():
+        sections = [DiffSection(text=diff_text.strip(), files=sorted(set(changed_files)))]
+    return _chunk_diff_sections(sections, Config.LLM_DIFF_CHUNK_CHARS, Config.LLM_DIFF_MAX_SECTIONS)
+
+
+def _perform_llm_review(
+    llm_client: LLMClient,
+    diff_chunks: list[DiffChunk],
+    full_diff_text: str,
+    full_context_text: str,
+    context_manager: CodeContextManager,
+    project_metadata: dict[str, Any],
+    changed_files: list[str],
+    analysis_source: str,
+    protocol_hints: Optional[str],
+    scan_mode: str,
+    max_findings: Optional[int],
+) -> dict[str, Any]:
+    metadata = _prepare_llm_metadata(project_metadata, changed_files, analysis_source, scan_mode)
+    enabled = getattr(llm_client, "enabled", True)
+    if not enabled:
+        response = llm_client.review_changes(
+            diff_content=full_diff_text,
+            context_content=full_context_text,
+            metadata=metadata,
+            protocol_hints=protocol_hints,
+            max_findings=max_findings,
+        )
+        response.setdefault("chunks", [])
+        return response
+
+    if not diff_chunks:
+        return {
+            "summary": "未检测到 Python 变更，LLM 审计已跳过。",
+            "insights": [],
+            "findings": [],
+            "chunks": [],
+        }
+
+    combined_findings: list[dict[str, Any]] = []
+    combined_insights: list[str] = []
+    chunk_summaries: list[tuple[int, str]] = []
+    chunk_stats: list[dict[str, Any]] = []
+    total_chunks = len(diff_chunks)
+
+    for idx, chunk in enumerate(diff_chunks, start=1):
+        chunk_metadata = dict(metadata)
+        chunk_metadata.update(
+            {
+                "chunk_index": idx,
+                "chunk_total": total_chunks,
+                "chunk_section_count": chunk.section_count,
+                "chunk_file_count": len(chunk.files),
+                "chunk_diff_bytes": chunk.diff_bytes,
+            }
+        )
+        chunk_context = context_manager.retrieve_context(chunk.text, include_paths=chunk.files or None)
+        response = llm_client.review_changes(
+            diff_content=chunk.text,
+            context_content=chunk_context,
+            metadata=chunk_metadata,
+            protocol_hints=protocol_hints,
+            max_findings=max_findings,
+        )
+        chunk_stats.append(
+            {
+                "index": idx,
+                "file_count": len(chunk.files),
+                "section_count": chunk.section_count,
+                "diff_bytes": chunk.diff_bytes,
+                "raw_summary": response.get("summary") or "",
+            }
+        )
+        combined_findings.extend(response.get("findings") or [])
+        combined_insights.extend(response.get("insights") or [])
+        summary = (response.get("summary") or "").strip()
+        if summary:
+            chunk_summaries.append((idx, summary))
+
+    if total_chunks == 1 and chunk_summaries:
+        aggregated_summary = chunk_summaries[0][1]
+    else:
+        aggregated_summary = " ".join(f"[片段 {idx}] {text}" for idx, text in chunk_summaries).strip()
+    return {
+        "summary": aggregated_summary,
+        "insights": combined_insights,
+        "findings": combined_findings,
+        "chunks": chunk_stats,
+    }
 
 
 def _discover_python_targets(root_path: Path, limit: int = 5) -> list[str]:
@@ -625,16 +869,17 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
 
         diff_text = ""
         analysis_source = "diff"
+        diff_target = getattr(opts, "diff_target", None)
         with PhaseContext(state, "diff"):
-            diff_text = get_git_diff(original_path, changed_files)
+            diff_text = get_git_diff(original_path, changed_files, diff_target)
             if not diff_text:
                 analysis_source = "snapshot"
-                diff_text = get_project_snapshot(workspace_path, include_paths=changed_files)
+                diff_text = get_project_snapshot(workspace_path, include_paths=changed_files or None)
 
         context_manager = CodeContextManager(workspace_path)
         with PhaseContext(state, "context"):
             context_manager.build_index()
-            context_text = context_manager.retrieve_context(diff_text)
+            context_text = context_manager.retrieve_context(diff_text, include_paths=changed_files or None)
 
         advisor = ProtocolAdvisor()
         protocol_evidence = advisor.gather(diff_text, context_text)
@@ -642,22 +887,24 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
 
         preset = SCAN_MODE_PRESETS.get(opts.scan_mode, SCAN_MODE_PRESETS["standard"])
         llm_client = LLMClient(max_retries=opts.llm_retries)
+        diff_chunks = _prepare_llm_chunks(diff_text, changed_files)
         with PhaseContext(state, "llm_review"):
-            llm_response = llm_client.review_changes(
-                diff_content=diff_text,
-                context_content=context_text,
-                metadata=_prepare_llm_metadata(
-                    project_metadata,
-                    changed_files,
-                    analysis_source,
-                    opts.scan_mode,
-                ),
+            llm_response = _perform_llm_review(
+                llm_client=llm_client,
+                diff_chunks=diff_chunks,
+                full_diff_text=diff_text,
+                full_context_text=context_text,
+                context_manager=context_manager,
+                project_metadata=project_metadata,
+                changed_files=changed_files,
+                analysis_source=analysis_source,
                 protocol_hints=protocol_hints,
+                scan_mode=opts.scan_mode,
                 max_findings=preset.get("llm_max_findings"),
             )
 
-        auditor = HeuristicAuditor()
-        audit_findings = auditor.run(diff_text, context_text)
+        auditor = HeuristicAuditor(scan_context=Config.HEURISTIC_SCAN_CONTEXT)
+        audit_findings = auditor.run(diff_text, context_text, analysis_source=analysis_source)
         style_findings = analyze_style(workspace_path, include_paths=changed_files or None)
         taint_findings = analyze_taint(workspace_path, include_paths=changed_files or None)
         quality_findings = collect_quality_findings(workspace_path)
@@ -685,6 +932,7 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
         summary_artifacts = _write_summary_artifacts(summary_text, opts.summary_path)
         artifacts.update(summary_artifacts)
 
+        llm_chunks = llm_response.get("chunks") or []
         counts = {
             "llm": len(llm_findings),
             "audit": len(audit_findings),
@@ -703,6 +951,7 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
                 "diff_bytes": len(diff_text or ""),
                 "context_bytes": len(context_text or ""),
                 "changed_file_count": len(changed_files),
+                "chunk_count": len(llm_chunks),
             },
             "suppression": {
                 "patterns": suppress_patterns,
@@ -720,6 +969,12 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
             "reproduction_count": len(reproduction_attempts),
             "diff_target": getattr(opts, "diff_target", None),
             "quality_tools": ["ruff", "bandit"],
+            "llm_chunking": {
+                "chunk_count": len(llm_chunks),
+                "chunk_char_limit": Config.LLM_DIFF_CHUNK_CHARS,
+                "chunk_section_limit": Config.LLM_DIFF_MAX_SECTIONS,
+            },
+            "llm_chunks": llm_chunks,
         }
         analysis = {
             "source": analysis_source,

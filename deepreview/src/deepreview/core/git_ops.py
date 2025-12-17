@@ -20,7 +20,11 @@ def _matches(path: str, include_paths: Sequence[str] | None) -> bool:
             return True
     return False
 
-def get_git_diff(repo_path: str, include_paths: Sequence[str] | None = None) -> str:
+def get_git_diff(
+    repo_path: str,
+    include_paths: Sequence[str] | None = None,
+    diff_target: str | None = None,
+) -> str:
     """
     Retrieves the git diff from the specified repository path.
     Includes staged, unstaged, and untracked files (text only).
@@ -30,44 +34,51 @@ def get_git_diff(repo_path: str, include_paths: Sequence[str] | None = None) -> 
     except git.exc.InvalidGitRepositoryError:
         print(f"[Git] Error: {repo_path} is not a valid git repository.")
         return None
-    
-    full_diff = []
-    
+
     include_paths = _normalize_paths(include_paths)
+    full_diff: list[str] = []
+    path_args = ["--"] + include_paths if include_paths else []
 
-    def _run_diff(args: list[str]) -> str:
-        extra = ["--"] + include_paths if include_paths else []
-        return repo.git.diff(*args, *extra)
+    def _run_diff(*args: str) -> str:
+        return repo.git.diff(*args, *path_args)
 
-    # 1. Staged Changes
+    if diff_target:
+        try:
+            ref = diff_target.strip()
+            if ref:
+                comparison = _run_diff(f"{ref}...HEAD")
+                if comparison:
+                    full_diff.append(f"--- Comparison: {ref}...HEAD ---\n{comparison}")
+        except Exception as exc:
+            print(f"[Git] Warning: diff against {diff_target} failed: {exc}")
+
     try:
-        staged = _run_diff(["--staged"])
+        staged = _run_diff("--staged")
         if staged:
             full_diff.append("--- Staged Changes ---\n" + staged)
-    except: pass
+    except Exception:
+        pass
 
-    # 2. Unstaged Changes
     try:
-        unstaged = _run_diff([])
+        unstaged = _run_diff()
         if unstaged:
             full_diff.append("--- Unstaged Changes ---\n" + unstaged)
-    except: pass
+    except Exception:
+        pass
 
-    # 3. Untracked Files
     for file in repo.untracked_files:
         if include_paths and not _matches(file, include_paths):
             continue
         path = os.path.join(repo.working_dir, file)
-        # Skip binary files or deep directories for simplicity in this version
-        if not os.path.isfile(path): continue
-
+        if not os.path.isfile(path):
+            continue
         try:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                full_diff.append(f"--- Untracked File: {file} ---\n{content}")
-        except Exception: 
-            pass # Skip unreadable files
-    return "\n\n".join(full_diff).strip()
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                content = handle.read()
+            full_diff.append(f"--- Untracked File: {file} ---\n{content}")
+        except Exception:
+            continue
+    return "\n\n".join(section for section in full_diff if section.strip()).strip()
 
 def get_changed_files(repo_path: str, diff_target: str | None = None) -> list[str]:
     try:

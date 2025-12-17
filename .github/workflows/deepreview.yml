@@ -54,6 +54,8 @@ jobs:
         working-directory: deepreview
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_BASE_URL: ${{ secrets.NVIDIA_BASE_URL }}
+          MODEL_NAME: ${{ secrets.MODEL_NAME }}
           PYTHONPATH: ${{ github.workspace }}/deepreview/src
           BASE_REF: ${{ steps.diff.outputs.base_ref }}
         run: |

@@ -22,6 +22,9 @@ class Config:
     REPORT_LOG_LINE_LIMIT = int(os.getenv("REPORT_LOG_LINE_LIMIT", "100"))
     CANDIDATE_VALIDATION_LIMIT = int(os.getenv("CANDIDATE_VALIDATION_LIMIT", "3"))
     AUTOMATION_MAX_ITERATIONS = int(os.getenv("AUTOMATION_MAX_ITERATIONS", "50"))
+    LLM_DIFF_CHUNK_CHARS = int(os.getenv("LLM_DIFF_CHUNK_CHARS", "200000"))
+    LLM_DIFF_MAX_SECTIONS = int(os.getenv("LLM_DIFF_MAX_SECTIONS", "20"))
+    HEURISTIC_SCAN_CONTEXT = os.getenv("HEURISTIC_SCAN_CONTEXT", "0") not in {"0", "false", "False", ""}
 
     # App Settings
     IGNORED_FILES = {"audit.py", "exploit_generated.py", "init_db.py", "setup.py"}

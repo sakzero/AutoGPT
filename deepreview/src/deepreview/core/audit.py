@@ -84,15 +84,23 @@ RULES: Tuple[HeuristicRule, ...] = (
 class HeuristicAuditor:
     """Light-weight text heuristics to surface obvious risks without an LLM."""
 
-    def __init__(self, rules: Tuple[HeuristicRule, ...] = RULES):
+    def __init__(self, rules: Tuple[HeuristicRule, ...] = RULES, scan_context: bool = False):
         self.rules = rules
+        self.scan_context = scan_context
 
-    def run(self, diff_text: str, context_text: Optional[str] = None) -> List[Dict[str, Optional[str]]]:
+    def run(
+        self,
+        diff_text: str,
+        context_text: Optional[str] = None,
+        analysis_source: str = "diff",
+    ) -> List[Dict[str, Optional[str]]]:
         findings: List[Dict[str, Optional[str]]] = []
         seen: set[tuple[str, str | None, int | None]] = set()
         findings.extend(self._scan_diff(diff_text, seen))
-        findings.extend(self._scan_plain(diff_text, source="diff", seen=seen))
-        if context_text:
+        normalized_source = (analysis_source or "diff").lower()
+        if diff_text and normalized_source != "diff":
+            findings.extend(self._scan_plain(diff_text, source=normalized_source, seen=seen))
+        if self.scan_context and context_text:
             findings.extend(self._scan_plain(context_text, source="context", seen=seen))
         return findings
 
