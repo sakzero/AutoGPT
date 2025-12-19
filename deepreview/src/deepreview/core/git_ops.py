@@ -3,7 +3,19 @@ from typing import Iterable, Sequence
 
 import git
 
-IGNORED_DIRECTORIES: Sequence[str] = (".git", ".venv", "venv", "__pycache__", "deepreview")
+IGNORED_DIRECTORIES: Sequence[str] = (
+    ".git",
+    ".venv",
+    "venv",
+    ".tox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "__pycache__",
+    "deepreview_runs",
+    "artifacts",
+    "deepreview",
+)
 DEFAULT_EXTENSIONS: Sequence[str] = (".py",)
 
 def _normalize_paths(paths: Sequence[str] | None) -> list[str]:
@@ -36,21 +48,20 @@ def get_git_diff(
         return None
 
     include_paths = _normalize_paths(include_paths)
-    full_diff: list[str] = []
     path_args = ["--"] + include_paths if include_paths else []
 
     def _run_diff(*args: str) -> str:
         return repo.git.diff(*args, *path_args)
 
-    if diff_target:
+    ref = (diff_target or "").strip()
+    if ref:
         try:
-            ref = diff_target.strip()
-            if ref:
-                comparison = _run_diff(f"{ref}...HEAD")
-                if comparison:
-                    full_diff.append(f"--- Comparison: {ref}...HEAD ---\n{comparison}")
+            return _run_diff(f"{ref}...HEAD").strip()
         except Exception as exc:
             print(f"[Git] Warning: diff against {diff_target} failed: {exc}")
+            return ""
+
+    full_diff: list[str] = []
 
     try:
         staged = _run_diff("--staged")
@@ -67,7 +78,12 @@ def get_git_diff(
         pass
 
     for file in repo.untracked_files:
-        if include_paths and not _matches(file, include_paths):
+        norm_file = file.replace("\\", "/")
+        if any(part in IGNORED_DIRECTORIES for part in norm_file.split("/")):
+            continue
+        if include_paths and not _matches(norm_file, include_paths):
+            continue
+        if not norm_file.endswith(tuple(DEFAULT_EXTENSIONS)):
             continue
         path = os.path.join(repo.working_dir, file)
         if not os.path.isfile(path):
@@ -75,7 +91,7 @@ def get_git_diff(
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as handle:
                 content = handle.read()
-            full_diff.append(f"--- Untracked File: {file} ---\n{content}")
+            full_diff.append(f"--- Untracked File: {norm_file} ---\n{content}")
         except Exception:
             continue
     return "\n\n".join(section for section in full_diff if section.strip()).strip()
@@ -87,15 +103,28 @@ def get_changed_files(repo_path: str, diff_target: str | None = None) -> list[st
         print(f"[Git] Error: {repo_path} is not a valid git repository.")
         return []
 
-    refs = [diff_target] if diff_target else []
     try:
-        names = repo.git.diff("--name-only", *refs).splitlines()
+        if diff_target:
+            names = repo.git.diff("--name-only", f"{diff_target}...HEAD").splitlines()
+        else:
+            names = repo.git.diff("--name-only").splitlines()
     except Exception:
         try:
             names = repo.git.diff("--name-only", "HEAD~1").splitlines()
         except Exception:
             names = []
-    return [name.strip().replace("\\", "/") for name in names if name.strip()]
+
+    result: list[str] = []
+    for name in names:
+        norm = name.strip().replace("\\", "/")
+        if not norm:
+            continue
+        if any(part in IGNORED_DIRECTORIES for part in norm.split("/")):
+            continue
+        if not norm.endswith(tuple(DEFAULT_EXTENSIONS)):
+            continue
+        result.append(norm)
+    return sorted(set(result))
 
 def get_project_snapshot(root_dir: str,
                          extensions: Iterable[str] = DEFAULT_EXTENSIONS,
