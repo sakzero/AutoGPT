@@ -2,7 +2,8 @@
 import os
 import shutil
 import subprocess
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence
 
 RUFF_SEVERITY_BY_PREFIX = {
     "e": "high",
@@ -31,11 +32,15 @@ def _run_command(cmd: List[str], cwd: str) -> str | None:
         return None
 
 
-def run_ruff(target_path: str, base_path: str) -> List[Dict[str, str]]:
-    output = _run_command(
-        ["ruff", "check", target_path, "--exit-zero", "--output-format", "json"],
-        cwd=target_path,
-    )
+def run_ruff(
+    target_path: str,
+    base_path: str,
+    include_paths: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
+    targets = _normalize_targets(target_path, include_paths)
+    cmd = ["ruff", "check", "--exit-zero", "--output-format", "json"]
+    cmd.extend(targets if targets else [target_path])
+    output = _run_command(cmd, cwd=target_path)
     if not output:
         return []
     try:
@@ -60,11 +65,18 @@ def run_ruff(target_path: str, base_path: str) -> List[Dict[str, str]]:
     return findings
 
 
-def run_bandit(target_path: str, base_path: str) -> List[Dict[str, str]]:
-    output = _run_command(
-        ["bandit", "-r", target_path, "-f", "json", "-q", "--exit-zero"],
-        cwd=target_path,
-    )
+def run_bandit(
+    target_path: str,
+    base_path: str,
+    include_paths: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
+    targets = _normalize_targets(target_path, include_paths)
+    cmd = ["bandit", "-f", "json", "-q", "--exit-zero"]
+    if targets:
+        cmd.extend(targets)
+    else:
+        cmd.extend(["-r", target_path])
+    output = _run_command(cmd, cwd=target_path)
     if not output:
         return []
     try:
@@ -89,10 +101,13 @@ def run_bandit(target_path: str, base_path: str) -> List[Dict[str, str]]:
     return findings
 
 
-def collect_quality_findings(target_path: str) -> List[Dict[str, str]]:
+def collect_quality_findings(
+    target_path: str,
+    include_paths: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
     findings: List[Dict[str, str]] = []
-    findings.extend(run_ruff(target_path, target_path))
-    findings.extend(run_bandit(target_path, target_path))
+    findings.extend(run_ruff(target_path, target_path, include_paths=include_paths))
+    findings.extend(run_bandit(target_path, target_path, include_paths=include_paths))
     return _deduplicate(findings)
 
 
@@ -126,3 +141,19 @@ def _relpath(path: str | None, base: str) -> str | None:
         return rel.replace("\\", "/")
     except Exception:
         return path
+
+
+def _normalize_targets(target_path: str, include_paths: Optional[Sequence[str]]) -> List[str]:
+    if not include_paths:
+        return []
+    root = Path(target_path).resolve()
+    targets: List[str] = []
+    for entry in include_paths:
+        cleaned = (entry or "").strip().replace("\\", "/")
+        if not cleaned or not cleaned.endswith(".py"):
+            continue
+        candidate = root / cleaned
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        targets.append(cleaned)
+    return targets

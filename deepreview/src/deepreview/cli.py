@@ -964,7 +964,7 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
         audit_findings = auditor.run(diff_text, context_text, analysis_source=analysis_source)
         style_findings = analyze_style(workspace_path, include_paths=changed_files or None)
         taint_findings = analyze_taint(workspace_path, include_paths=changed_files or None)
-        quality_findings = collect_quality_findings(workspace_path)
+        quality_findings = collect_quality_findings(workspace_path, include_paths=changed_files or None)
 
         llm_findings, removed_llm = _apply_suppressions(llm_response.get("findings") or [], suppress_patterns)
         audit_findings, removed_audit = _apply_suppressions(audit_findings, suppress_patterns)
