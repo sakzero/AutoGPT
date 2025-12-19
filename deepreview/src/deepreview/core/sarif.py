@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,11 @@ def _build_location(finding: dict[str, Any], target_uri: str) -> dict[str, Any]:
     return location
 
 
+def _slugify(text: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", (text or "").strip()).strip("-").lower()
+    return cleaned or "rule"
+
+
 def _build_llm_result(idx: int, finding: dict[str, Any], target_uri: str) -> dict[str, Any]:
     title = finding.get("title") or f"LLM Finding #{idx}"
     description = finding.get("description") or title
@@ -37,7 +43,7 @@ def _build_llm_result(idx: int, finding: dict[str, Any], target_uri: str) -> dic
         message_lines.append(f"Recommendation: {recommendation}")
     message = "\n".join(message_lines)
     return {
-        "ruleId": f"deepreview-llm-{idx}",
+        "ruleId": "deepreview-llm",
         "level": _map_severity(finding.get("severity")),
         "message": {"text": message},
         "properties": {
@@ -50,10 +56,13 @@ def _build_llm_result(idx: int, finding: dict[str, Any], target_uri: str) -> dic
 
 
 def _build_quality_result(idx: int, finding: dict[str, Any], target_uri: str) -> dict[str, Any]:
-    title = f"{finding.get('tool', 'quality')}:{finding.get('code', 'check')}"
+    tool = finding.get("tool") or "quality"
+    code = finding.get("code") or "check"
+    rule_id = f"deepreview-{_slugify(str(tool))}-{_slugify(str(code))}"
+    title = f"{tool}:{code}"
     message = finding.get("message") or title
     return {
-        "ruleId": f"deepreview-quality-{idx}",
+        "ruleId": rule_id,
         "level": _map_severity(finding.get("severity")),
         "message": {"text": message},
         "properties": {
@@ -68,6 +77,8 @@ def _build_quality_result(idx: int, finding: dict[str, Any], target_uri: str) ->
 
 def _build_heuristic_result(idx: int, finding: dict[str, Any], target_uri: str) -> dict[str, Any]:
     title = finding.get("title") or f"Heuristic Finding #{idx}"
+    rule_key = finding.get("rule_id") or title
+    rule_id = f"deepreview-heuristic-{_slugify(str(rule_key))}"
     description = finding.get("description") or title
     evidence = finding.get("evidence")
     recommendation = finding.get("recommendation")
@@ -77,7 +88,7 @@ def _build_heuristic_result(idx: int, finding: dict[str, Any], target_uri: str) 
     if recommendation:
         message_parts.append(f"Recommendation: {recommendation}")
     return {
-        "ruleId": f"deepreview-heuristic-{idx}",
+        "ruleId": rule_id,
         "level": _map_severity(finding.get("severity")),
         "message": {"text": "\n".join(message_parts)},
         "properties": {
@@ -114,14 +125,20 @@ def write_sarif(report_data: dict[str, Any], sarif_path: str) -> None:
     for idx, finding in enumerate(heuristic_findings, start=1):
         results.append(_build_heuristic_result(heuristic_offset + idx, finding, target_uri))
 
-    rules = [
-        {
-            "id": result["ruleId"],
-            "name": result["ruleId"],
-            "shortDescription": {"text": result["message"]["text"]},
+    rules_by_id: dict[str, dict[str, Any]] = {}
+    for result in results:
+        rule_id = result.get("ruleId")
+        if not rule_id:
+            continue
+        title = (result.get("properties") or {}).get("title") or rule_id
+        if rule_id in rules_by_id:
+            continue
+        rules_by_id[rule_id] = {
+            "id": rule_id,
+            "name": title,
+            "shortDescription": {"text": title},
         }
-        for result in results
-    ]
+    rules = list(rules_by_id.values())
 
     sarif_doc = {
         "version": "2.1.0",

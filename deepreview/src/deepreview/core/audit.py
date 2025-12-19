@@ -98,7 +98,9 @@ class HeuristicAuditor:
         seen: set[tuple[str, str | None, int | None]] = set()
         findings.extend(self._scan_diff(diff_text, seen))
         normalized_source = (analysis_source or "diff").lower()
-        if diff_text and normalized_source != "diff":
+        if diff_text and normalized_source == "snapshot":
+            findings.extend(self._scan_snapshot(diff_text, seen))
+        elif diff_text and normalized_source != "diff":
             findings.extend(self._scan_plain(diff_text, source=normalized_source, seen=seen))
         if self.scan_context and context_text:
             findings.extend(self._scan_plain(context_text, source="context", seen=seen))
@@ -140,6 +142,26 @@ class HeuristicAuditor:
                 current_line = current_line + 1 if current_line is not None else None
         return findings
 
+    def _scan_snapshot(
+        self, snapshot_text: str, seen: set[tuple[str, str | None, int | None]]
+    ) -> List[Dict[str, Optional[str]]]:
+        findings: List[Dict[str, Optional[str]]] = []
+        current_file: Optional[str] = None
+        current_line: int = 0
+        for raw_line in snapshot_text.splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith("--- File:"):
+                current_file = stripped.split(":", 1)[1].strip() or None
+                current_line = 0
+                continue
+            if stripped.startswith("--- Untracked File:"):
+                current_file = stripped.split(":", 1)[1].strip() or None
+                current_line = 0
+                continue
+            current_line += 1
+            findings.extend(self._match_rules(raw_line, current_file, current_line, seen))
+        return findings
+
     def _scan_plain(
         self,
         text: str,
@@ -167,6 +189,10 @@ class HeuristicAuditor:
     ) -> List[Dict[str, Optional[str]]]:
         matches: List[Dict[str, Optional[str]]] = []
         for rule in self.rules:
+            if rule.name == "yaml_unsafe_load":
+                lowered = line.lower()
+                if any(token in lowered for token in ("safeloader", "csafeloader", "fullloader")):
+                    continue
             if not rule.pattern.search(line):
                 continue
             identity = (rule.name, file_path, line_number)
@@ -175,6 +201,7 @@ class HeuristicAuditor:
             seen.add(identity)
             matches.append(
                 {
+                    "rule_id": rule.name,
                     "title": rule.name.replace("_", " ").title(),
                     "severity": rule.severity,
                     "description": rule.description,

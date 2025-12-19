@@ -469,6 +469,7 @@ def _perform_llm_review(
                 "section_count": chunk.section_count,
                 "diff_bytes": chunk.diff_bytes,
                 "raw_summary": response.get("summary") or "",
+                "error": response.get("error") or "",
             }
         )
         combined_findings.extend(response.get("findings") or [])
@@ -928,6 +929,7 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
             if not diff_text:
                 analysis_source = "snapshot"
                 diff_text = get_project_snapshot(workspace_path, include_paths=changed_files or None)
+        tracer.set_target(original_path, analysis_source, workspace_path)
 
         context_manager = CodeContextManager(workspace_path)
         with PhaseContext(state, "context"):
@@ -1088,6 +1090,8 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
             exit_code = 2
 
         if opts.archive_run is not None:
+            tracer.set_target(original_path, analysis_source, workspace_path)
+            tracer.finalize(report_status, report_path if report_path.exists() else None)
             archive_path = _archive_run_directory(tracer.run_directory(), opts.archive_run or None)
             artifacts["archive"] = str(archive_path)
             tracer.record_artifact("archive", archive_path)

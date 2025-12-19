@@ -12,13 +12,28 @@ from ..config import Config
 
 class LLMClient:
     def __init__(self, max_retries: int | None = None):
-        self.enabled = bool(Config.API_KEY)
-        self.client = OpenAI(api_key=Config.API_KEY, base_url=Config.BASE_URL) if self.enabled else None
+        self.last_error: str | None = None
+        self.enabled = bool(Config.API_KEY and Config.BASE_URL and Config.MODEL_NAME)
+        if self.enabled:
+            try:
+                self.client = OpenAI(api_key=Config.API_KEY, base_url=Config.BASE_URL)
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = str(exc)
+                self.enabled = False
+                self.client = None
+                print(f"[LLM] Error: failed to initialize client: {exc}")
+        else:
+            self.client = None
         retries = Config.LLM_MAX_RETRIES if max_retries is None else max_retries
         self.max_attempts = max(1, retries)
         self.backoff_seconds = max(0.0, Config.LLM_BACKOFF_SECONDS)
         if not self.enabled:
-            print('[LLM] NVIDIA_API_KEY missing; LLM review disabled.')
+            if not Config.API_KEY:
+                print("[LLM] NVIDIA_API_KEY missing; LLM review disabled.")
+            elif not Config.BASE_URL:
+                print("[LLM] NVIDIA_BASE_URL missing; LLM review disabled.")
+            elif not Config.MODEL_NAME:
+                print("[LLM] MODEL_NAME missing; LLM review disabled.")
 
     def chat(self, messages) -> Optional[str]:
         if not self.enabled or not self.client:
@@ -30,8 +45,10 @@ class LLMClient:
                 temperature=Config.TEMPERATURE,
                 max_tokens=Config.MAX_TOKENS,
             )
+            self.last_error = None
             return completion.choices[0].message.content
         except Exception as exc:  # noqa: BLE001
+            self.last_error = str(exc)
             print(f"[LLM] Error: {exc}")
             return None
 
@@ -45,8 +62,14 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Run a structured review of the diff and return JSON-friendly output."""
 
+        self.last_error = None
         if not self.enabled:
-            return {"summary": "LLM review disabled (missing NVIDIA_API_KEY).", "insights": ["Provide NVIDIA_API_KEY in CI to enable LLM-based findings."], "findings": []}
+            return {
+                "summary": "LLM review disabled (missing configuration).",
+                "insights": ["Provide NVIDIA_API_KEY (and optional MODEL_NAME/NVIDIA_BASE_URL) in CI to enable LLM-based findings."],
+                "findings": [],
+                "error": self.last_error or "LLM disabled",
+            }
 
         prompt = self._build_review_prompt(
             diff_content,
@@ -72,6 +95,8 @@ class LLMClient:
             parsed = self._parse_review_response(response, max_findings)
             if parsed is not None:
                 return parsed
+            if response:
+                self.last_error = "LLM response was not valid JSON"
 
             snippet = (response or "")[:400]
             retry_instruction = textwrap.dedent(
@@ -86,7 +111,7 @@ class LLMClient:
             messages.append({"role": "user", "content": retry_instruction})
             time.sleep(self.backoff_seconds * attempt)
 
-        return {"summary": "", "insights": [], "findings": []}
+        return {"summary": "", "insights": [], "findings": [], "error": self.last_error or "LLM request failed"}
 
     def _build_review_prompt(
         self,

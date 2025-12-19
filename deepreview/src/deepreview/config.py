@@ -7,8 +7,8 @@ load_dotenv()
 class Config:
     # NVIDIA API
     API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
-    BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-    MODEL_NAME = os.getenv("MODEL_NAME", "qwen/qwen3-coder-480b-a35b-instruct")
+    BASE_URL = (os.getenv("NVIDIA_BASE_URL") or "https://integrate.api.nvidia.com/v1").strip()
+    MODEL_NAME = (os.getenv("MODEL_NAME") or "qwen/qwen3-coder-480b-a35b-instruct").strip()
     
     # Audit Settings
     MAX_TOKENS = 2048

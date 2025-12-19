@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 RUFF_SEVERITY_BY_PREFIX = {
-    "e": "high",
-    "f": "high",
-    "w": "medium",
-    "d": "medium",
-    "n": "medium",
-    "b": "high",
+    "e": "low",
+    "f": "low",
+    "w": "low",
+    "d": "low",
+    "n": "low",
+    "b": "medium",
     "s": "high",
 }
 
