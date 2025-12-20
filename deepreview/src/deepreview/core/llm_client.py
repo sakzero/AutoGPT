@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 import textwrap
 import time
 from typing import Any, Optional
@@ -90,10 +91,16 @@ class LLMClient:
             {"role": "user", "content": prompt},
         ]
 
+        last_response: str | None = None
+        last_response_len = 0
         for attempt in range(1, self.max_attempts + 1):
             response = self.chat(messages)
+            last_response = response
+            last_response_len = len(response or "")
             parsed = self._parse_review_response(response, max_findings)
             if parsed is not None:
+                parsed.setdefault("raw_response_len", last_response_len)
+                parsed.setdefault("attempts", attempt)
                 return parsed
             if response:
                 self.last_error = "LLM response was not valid JSON"
@@ -111,7 +118,17 @@ class LLMClient:
             messages.append({"role": "user", "content": retry_instruction})
             time.sleep(self.backoff_seconds * attempt)
 
-        return {"summary": "", "insights": [], "findings": [], "error": self.last_error or "LLM request failed"}
+        error_payload: dict[str, Any] = {
+            "summary": "",
+            "insights": [],
+            "findings": [],
+            "error": self.last_error or "LLM request failed",
+            "raw_response_len": last_response_len,
+            "attempts": self.max_attempts,
+        }
+        if last_response:
+            error_payload["raw_response_preview"] = last_response[:400]
+        return error_payload
 
     def _build_review_prompt(
         self,
@@ -149,6 +166,7 @@ class LLMClient:
             - Focus on {limit_text} that the organization must review.
             - Prefer referencing exact files/lines found in the diff/context.
             - Do NOT invent behavior you cannot justify from the code.
+            - Output MUST start with '{{' and end with '}}' (no prose, no markdown fences).
 
             Repository metadata:
             {metadata_block}
@@ -166,26 +184,31 @@ class LLMClient:
             """
         ).strip()
 
+    _FENCE_RE = re.compile(r"```(?P<lang>[a-zA-Z0-9_-]+)?\\s*(?P<body>.*?)\\s*```", re.DOTALL)
+
     def _parse_review_response(
         self, response: Optional[str], max_findings: Optional[int]
     ) -> Optional[dict[str, Any]]:
         if not response:
             return None
 
-        lower = response.lower()
-        payload = response
-        if "```json" in lower:
-            payload = response.split("```json", 1)[1].split("```", 1)[0]
-        elif "```" in lower:
-            payload = response.split("```", 1)[1].split("```", 1)[0]
+        payload = self._extract_json_payload(response)
+        if not payload:
+            return None
 
         try:
-            data = json.loads(payload)
+            data: Any = json.loads(payload)
         except json.JSONDecodeError:
             return None
 
+        if isinstance(data, list):
+            data = {"summary": "", "insights": [], "findings": data}
+        if not isinstance(data, dict):
+            return None
+
         findings: list[dict[str, Any]] = []
-        for item in data.get("findings", []) or []:
+        findings_field = data.get("findings") or data.get("issues") or data.get("risks") or []
+        for item in findings_field or []:
             if not isinstance(item, dict):
                 continue
             line_value = item.get("line") or item.get("line_number") or item.get("lineNo")
@@ -234,3 +257,93 @@ class LLMClient:
         if normalized in {"high", "medium", "low"}:
             return normalized
         return "medium"
+
+    def _extract_json_payload(self, response: str) -> str | None:
+        stripped = (response or "").strip()
+        if not stripped:
+            return None
+
+        fenced = self._extract_fenced_payload(stripped)
+        if fenced:
+            candidate = fenced.strip()
+            if self._looks_like_json(candidate):
+                return candidate
+
+        balanced = self._extract_balanced_json(stripped)
+        if balanced:
+            return balanced.strip()
+
+        if self._looks_like_json(stripped):
+            return stripped
+        return None
+
+    def _extract_fenced_payload(self, text: str) -> str | None:
+        matches = list(self._FENCE_RE.finditer(text))
+        if not matches:
+            return None
+
+        json_blocks: list[str] = []
+        other_blocks: list[str] = []
+        for match in matches:
+            lang = (match.group("lang") or "").strip().lower()
+            body = (match.group("body") or "").strip()
+            if not body:
+                continue
+            if lang == "json":
+                json_blocks.append(body)
+            else:
+                other_blocks.append(body)
+
+        for block in json_blocks:
+            if self._looks_like_json(block):
+                return block
+        for block in other_blocks:
+            if self._looks_like_json(block):
+                return block
+        return json_blocks[0] if json_blocks else other_blocks[0] if other_blocks else None
+
+    def _looks_like_json(self, text: str) -> bool:
+        stripped = (text or "").lstrip()
+        return stripped.startswith("{") or stripped.startswith("[")
+
+    def _extract_balanced_json(self, text: str) -> str | None:
+        first_object = text.find("{")
+        first_array = text.find("[")
+        if first_object == -1 and first_array == -1:
+            return None
+        if first_object == -1:
+            start = first_array
+            open_char, close_char = "[", "]"
+        elif first_array == -1:
+            start = first_object
+            open_char, close_char = "{", "}"
+        else:
+            start = min(first_object, first_array)
+            open_char, close_char = ("{", "}") if start == first_object else ("[", "]")
+
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == "\"":
+                    in_string = False
+                continue
+
+            if ch == "\"":
+                in_string = True
+                continue
+            if ch == open_char:
+                depth += 1
+                continue
+            if ch == close_char:
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+
+        return None

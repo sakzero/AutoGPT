@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ from .core.analyzer import ProjectAnalyzer
 from .core.audit import HeuristicAuditor
 from .core.context import CodeContextManager
 from .core.dataflow import analyze_taint
-from .core.git_ops import get_changed_files, get_git_diff, get_project_snapshot
+from .core.git_ops import get_changed_files, get_git_diff
 from .core.llm_client import LLMClient
 from .core.protocols import ProtocolAdvisor
 from .core.quality import collect_quality_findings
@@ -93,15 +94,23 @@ def _stage_workspace(source_path: str, tracer: RunTracer) -> str:
 
 
 def _archive_run_directory(run_dir: Path, archive_path: Optional[str] = None) -> Path:
-    base_name: Path
     if archive_path:
         target = Path(archive_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        base_name = target.with_suffix("")
+        archive_file = target if target.suffix == ".zip" else target.with_suffix(".zip")
     else:
-        base_name = run_dir
-    archive_file = shutil.make_archive(str(base_name), "zip", root_dir=run_dir)
-    return Path(archive_file)
+        archive_file = run_dir.with_suffix(".zip")
+
+    include_workspace = os.getenv("ARCHIVE_INCLUDE_WORKSPACE", "0") not in {"0", "false", "False", ""}
+    with zipfile.ZipFile(archive_file, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in run_dir.rglob("*"):
+            if file_path.is_dir():
+                continue
+            rel = file_path.relative_to(run_dir)
+            if not include_workspace and rel.parts and rel.parts[0] == "workspace":
+                continue
+            archive.write(file_path, rel.as_posix())
+    return archive_file
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -470,6 +479,8 @@ def _perform_llm_review(
                 "diff_bytes": chunk.diff_bytes,
                 "raw_summary": response.get("summary") or "",
                 "error": response.get("error") or "",
+                "raw_response_len": response.get("raw_response_len") or 0,
+                "attempts": response.get("attempts") or 0,
             }
         )
         combined_findings.extend(response.get("findings") or [])
@@ -482,6 +493,11 @@ def _perform_llm_review(
         aggregated_summary = chunk_summaries[0][1]
     else:
         aggregated_summary = " ".join(f"[片段 {idx}] {text}" for idx, text in chunk_summaries).strip()
+
+    if not aggregated_summary:
+        chunk_errors = [item.get("error") for item in chunk_stats if item.get("error")]
+        if chunk_errors:
+            aggregated_summary = f"LLM 审计未返回可解析结果：{chunk_errors[0]}"
     return {
         "summary": aggregated_summary,
         "insights": combined_insights,
@@ -493,6 +509,132 @@ def _perform_llm_review(
             "truncated": chunks_truncated,
         },
     }
+
+
+def _select_llm_triage_candidates(
+    audit_findings: list[dict[str, Any]],
+    bandit_findings: list[dict[str, Any]],
+    taint_findings: list[dict[str, Any]],
+    limit: int = 20,
+) -> list[tuple[str, dict[str, Any]]]:
+    combined: list[tuple[str, dict[str, Any]]] = []
+    for label, findings in (
+        ("Heuristic", audit_findings),
+        ("Bandit", bandit_findings),
+        ("Taint", taint_findings),
+    ):
+        for finding in findings or []:
+            combined.append((label, finding))
+    combined.sort(key=lambda item: _severity_rank(str(item[1].get("severity", ""))))
+    return combined[: max(0, limit)]
+
+
+def _load_workspace_snippet(
+    workspace_path: str,
+    relative_file: str,
+    line_number: int | None,
+    radius: int = 6,
+    max_chars: int = 4000,
+) -> str:
+    if not relative_file:
+        return ""
+    file_path = (Path(workspace_path) / relative_file).resolve()
+    if not file_path.exists() or not file_path.is_file():
+        return ""
+    try:
+        lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return ""
+
+    if not lines:
+        return ""
+
+    if line_number is None:
+        start = 0
+        end = min(len(lines), 40)
+    else:
+        start = max(line_number - radius - 1, 0)
+        end = min(line_number + radius, len(lines))
+    snippet = "\n".join(lines[start:end]).strip()
+    if not snippet:
+        return ""
+    rendered = f"--- {relative_file}:{start + 1}-{end} ---\n{snippet}"
+    return rendered[:max_chars]
+
+
+def _perform_llm_triage(
+    llm_client: LLMClient,
+    workspace_path: str,
+    project_metadata: dict[str, Any],
+    audit_findings: list[dict[str, Any]],
+    bandit_findings: list[dict[str, Any]],
+    taint_findings: list[dict[str, Any]],
+    changed_files: list[str],
+    analysis_source: str,
+    scan_mode: str,
+    protocol_hints: Optional[str],
+    max_findings: Optional[int],
+) -> dict[str, Any]:
+    metadata = _prepare_llm_metadata(project_metadata, changed_files, analysis_source, scan_mode)
+    metadata["review_mode"] = "triage"
+
+    candidates = _select_llm_triage_candidates(audit_findings, bandit_findings, taint_findings, limit=20)
+    diff_lines = [
+        "Repository snapshot (no git diff available).",
+        "Triage the following static analyzer findings and produce the most actionable security issues.",
+        "",
+    ]
+
+    snippet_blocks: list[str] = []
+    if not candidates:
+        diff_lines.append("No static analyzer findings were provided. Provide general audit guidance for this repository.")
+    else:
+        for idx, (source, finding) in enumerate(candidates, start=1):
+            severity = finding.get("severity") or "info"
+            file_ref = finding.get("file") or "n/a"
+            line_ref = _safe_int(finding.get("line"))
+            code = finding.get("code") or finding.get("rule_id") or ""
+            title = _finding_title(finding)
+            message = (finding.get("message") or finding.get("description") or "").strip()
+            snippet_id = f"S{idx}"
+            diff_lines.append(
+                f"{idx}. source={source} severity={severity} file={file_ref} line={line_ref or 'n/a'} code={code} snippet={snippet_id}"
+            )
+            if message:
+                diff_lines.append(f"   message: {message}")
+
+            snippet = _load_workspace_snippet(workspace_path, str(file_ref), line_ref)
+            if snippet:
+                snippet_blocks.append(f"[{snippet_id}]\n{snippet}")
+
+    triage_diff = "\n".join(diff_lines).strip()
+    triage_context = "\n\n".join(snippet_blocks).strip()
+
+    response = llm_client.review_changes(
+        diff_content=triage_diff,
+        context_content=triage_context,
+        metadata=metadata,
+        protocol_hints=protocol_hints,
+        max_findings=max_findings,
+    )
+
+    response.setdefault(
+        "chunks",
+        [
+            {
+                "index": 1,
+                "file_count": len({f.get("file") for _, f in candidates if f.get("file")}),
+                "section_count": len(candidates),
+                "diff_bytes": len(triage_diff),
+                "raw_summary": response.get("summary") or "",
+                "error": response.get("error") or "",
+                "raw_response_len": response.get("raw_response_len") or 0,
+                "attempts": response.get("attempts") or 0,
+            }
+        ],
+    )
+    response.setdefault("chunk_overview", {"processed": 1, "available": 1, "truncated": False})
+    return response
 
 
 def _discover_python_targets(root_path: Path, limit: int = 5) -> list[str]:
@@ -569,47 +711,85 @@ def _severity_rank(value: str) -> int:
 
 
 def _collect_top_findings(
-    llm_findings: list[dict[str, Any]],
-    audit_findings: list[dict[str, Any]],
-    style_findings: list[dict[str, Any]],
-    taint_findings: list[dict[str, Any]],
+    sources: Sequence[tuple[str, Sequence[dict[str, Any]]]],
+    limit: int = 3,
 ) -> list[tuple[str, dict[str, Any]]]:
     combined: list[tuple[str, dict[str, Any]]] = []
-    for label, findings in (
-        ("LLM", llm_findings),
-        ("Heuristic", audit_findings),
-        ("Style", style_findings),
-        ("Taint", taint_findings),
-    ):
+    for label, findings in sources:
         for finding in findings or []:
             combined.append((label, finding))
     combined.sort(key=lambda item: _severity_rank(str(item[1].get("severity", ""))))
-    return combined[:3]
+    return combined[: max(0, limit)]
+
+
+def _finding_title(finding: dict[str, Any]) -> str:
+    title = (finding.get("title") or "").strip()
+    if title:
+        return title
+    tool = (finding.get("tool") or "").strip()
+    code = (finding.get("code") or finding.get("rule_id") or "").strip()
+    message = (finding.get("message") or finding.get("description") or "").strip()
+    if tool and code and message:
+        return f"{tool.upper()} {code}: {message}"
+    if tool and code:
+        return f"{tool.upper()} {code}".strip()
+    return message or "Untitled"
 
 
 def _render_run_summary(
-    severity_summary: dict[str, int],
+    security_severity: dict[str, int],
+    quality_severity: dict[str, int],
     llm_findings: list[dict[str, Any]],
     audit_findings: list[dict[str, Any]],
-    style_findings: list[dict[str, Any]],
+    bandit_findings: list[dict[str, Any]],
     taint_findings: list[dict[str, Any]],
+    style_findings: list[dict[str, Any]],
+    ruff_findings: list[dict[str, Any]],
 ) -> str:
     lines = []
     lines.append("")
     lines.append("=== DeepReview Summary ===")
-    lines.append(f"Severity distribution: {_format_severity_summary(severity_summary)}")
-    top_findings = _collect_top_findings(llm_findings, audit_findings, style_findings, taint_findings)
-    if not top_findings:
+    lines.append(f"Severity distribution (security): {_format_severity_summary(security_severity)}")
+    lines.append(f"Severity distribution (quality): {_format_severity_summary(quality_severity)}")
+
+    security_top = _collect_top_findings(
+        [
+            ("LLM", llm_findings),
+            ("Heuristic", audit_findings),
+            ("Bandit", bandit_findings),
+            ("Taint", taint_findings),
+        ]
+    )
+    quality_top = _collect_top_findings(
+        [
+            ("Style", style_findings),
+            ("Ruff", ruff_findings),
+        ]
+    )
+
+    if not security_top and not quality_top:
         lines.append("No actionable findings detected.")
         return "\n".join(lines)
-    lines.append("Top findings:")
-    for idx, (source, finding) in enumerate(top_findings, start=1):
-        title = finding.get("title") or "Untitled"
-        severity = finding.get("severity") or "info"
-        file_ref = finding.get("file") or "n/a"
-        line_ref = finding.get("line")
-        line_part = f":{line_ref}" if line_ref else ""
-        lines.append(f"  {idx}. [{severity}] ({source}) {title} - {file_ref}{line_part}")
+
+    if security_top:
+        lines.append("Top security findings:")
+        for idx, (source, finding) in enumerate(security_top, start=1):
+            title = _finding_title(finding)
+            severity = finding.get("severity") or "info"
+            file_ref = finding.get("file") or "n/a"
+            line_ref = finding.get("line")
+            line_part = f":{line_ref}" if line_ref else ""
+            lines.append(f"  {idx}. [{severity}] ({source}) {title} - {file_ref}{line_part}")
+
+    if quality_top:
+        lines.append("Top quality findings:")
+        for idx, (source, finding) in enumerate(quality_top, start=1):
+            title = _finding_title(finding)
+            severity = finding.get("severity") or "info"
+            file_ref = finding.get("file") or "n/a"
+            line_ref = finding.get("line")
+            line_part = f":{line_ref}" if line_ref else ""
+            lines.append(f"  {idx}. [{severity}] ({source}) {title} - {file_ref}{line_part}")
     return "\n".join(lines)
 
 
@@ -928,65 +1108,116 @@ def _run_single_target(opts: argparse.Namespace, config_patterns: Optional[list[
             diff_text = get_git_diff(original_path, changed_files, diff_target)
             if not diff_text:
                 analysis_source = "snapshot"
-                diff_text = get_project_snapshot(workspace_path, include_paths=changed_files or None)
+                diff_text = ""
         tracer.set_target(original_path, analysis_source, workspace_path)
-
-        context_manager = CodeContextManager(workspace_path)
-        with PhaseContext(state, "context"):
-            context_manager.build_index()
-            context_text = context_manager.retrieve_context(diff_text, include_paths=changed_files or None)
-
-        advisor = ProtocolAdvisor()
-        protocol_evidence = advisor.gather(diff_text, context_text)
-        protocol_hints = advisor.describe(diff_text, context_text)
 
         preset = SCAN_MODE_PRESETS.get(opts.scan_mode, SCAN_MODE_PRESETS["standard"])
         llm_client = LLMClient(max_retries=opts.llm_retries)
-        diff_chunks, chunk_available_count, chunk_truncated = _prepare_llm_chunks(
-            diff_text, changed_files, analysis_source
-        )
-        with PhaseContext(state, "llm_review"):
-            llm_response = _perform_llm_review(
-                llm_client=llm_client,
-                diff_chunks=diff_chunks,
-                available_chunk_count=chunk_available_count,
-                chunks_truncated=chunk_truncated,
-                full_diff_text=diff_text,
-                full_context_text=context_text,
-                context_manager=context_manager,
-                project_metadata=project_metadata,
-                changed_files=changed_files,
-                analysis_source=analysis_source,
-                protocol_hints=protocol_hints,
-                scan_mode=opts.scan_mode,
-                max_findings=preset.get("llm_max_findings"),
+        context_text = ""
+        protocol_evidence = []
+        protocol_hints = ""
+        llm_response: dict[str, Any] = {"summary": "", "insights": [], "findings": [], "chunks": [], "chunk_overview": {}}
+
+        if analysis_source == "diff" and diff_text:
+            context_manager = CodeContextManager(workspace_path)
+            with PhaseContext(state, "context"):
+                context_manager.build_index()
+                context_text = context_manager.retrieve_context(diff_text, include_paths=changed_files or None)
+
+            advisor = ProtocolAdvisor()
+            protocol_evidence = advisor.gather(diff_text, context_text)
+            protocol_hints = advisor.describe(diff_text, context_text)
+
+            diff_chunks, chunk_available_count, chunk_truncated = _prepare_llm_chunks(
+                diff_text, changed_files, analysis_source
             )
+            with PhaseContext(state, "llm_review"):
+                llm_response = _perform_llm_review(
+                    llm_client=llm_client,
+                    diff_chunks=diff_chunks,
+                    available_chunk_count=chunk_available_count,
+                    chunks_truncated=chunk_truncated,
+                    full_diff_text=diff_text,
+                    full_context_text=context_text,
+                    context_manager=context_manager,
+                    project_metadata=project_metadata,
+                    changed_files=changed_files,
+                    analysis_source=analysis_source,
+                    protocol_hints=protocol_hints,
+                    scan_mode=opts.scan_mode,
+                    max_findings=preset.get("llm_max_findings"),
+                )
 
         auditor = HeuristicAuditor(scan_context=Config.HEURISTIC_SCAN_CONTEXT)
-        audit_findings = auditor.run(diff_text, context_text, analysis_source=analysis_source)
+        if analysis_source == "snapshot":
+            audit_findings = auditor.run_workspace(workspace_path, include_paths=changed_files or None)
+        else:
+            audit_findings = auditor.run(diff_text, context_text, analysis_source=analysis_source)
         style_findings = analyze_style(workspace_path, include_paths=changed_files or None)
         taint_findings = analyze_taint(workspace_path, include_paths=changed_files or None)
         quality_findings = collect_quality_findings(workspace_path, include_paths=changed_files or None)
 
-        llm_findings, removed_llm = _apply_suppressions(llm_response.get("findings") or [], suppress_patterns)
         audit_findings, removed_audit = _apply_suppressions(audit_findings, suppress_patterns)
         style_findings, removed_style = _apply_suppressions(style_findings, suppress_patterns)
         taint_findings, removed_taint = _apply_suppressions(taint_findings, suppress_patterns)
         quality_findings, removed_quality = _apply_suppressions(quality_findings, suppress_patterns)
 
+        if analysis_source == "snapshot":
+            bandit_candidates = [
+                finding
+                for finding in quality_findings
+                if str(finding.get("tool", "")).lower() == "bandit"
+            ]
+            with PhaseContext(state, "llm_review"):
+                llm_response = _perform_llm_triage(
+                    llm_client=llm_client,
+                    workspace_path=workspace_path,
+                    project_metadata=project_metadata,
+                    audit_findings=audit_findings,
+                    bandit_findings=bandit_candidates,
+                    taint_findings=taint_findings,
+                    changed_files=changed_files,
+                    analysis_source=analysis_source,
+                    scan_mode=opts.scan_mode,
+                    protocol_hints=protocol_hints,
+                    max_findings=preset.get("llm_max_findings"),
+                )
+
+        llm_findings, removed_llm = _apply_suppressions(llm_response.get("findings") or [], suppress_patterns)
+
         severity_summary = _compute_severity_summary(
             [llm_findings, audit_findings, style_findings, taint_findings, quality_findings]
         )
+        bandit_findings = [
+            finding
+            for finding in quality_findings
+            if str(finding.get("tool", "")).lower() == "bandit"
+        ]
+        ruff_findings = [
+            finding
+            for finding in quality_findings
+            if str(finding.get("tool", "")).lower() == "ruff"
+        ]
+        other_quality_findings = [
+            finding
+            for finding in quality_findings
+            if str(finding.get("tool", "")).lower() not in {"bandit", "ruff"}
+        ]
+        security_severity = _compute_severity_summary([llm_findings, audit_findings, bandit_findings, taint_findings])
+        quality_severity = _compute_severity_summary([style_findings, ruff_findings, other_quality_findings])
         reproduction_attempts, repro_dir = _attempt_reproduction(taint_findings, tracer, workspace_path)
         if repro_dir:
             artifacts["reproduction_dir"] = str(repro_dir)
 
         summary_text = _render_run_summary(
-            severity_summary,
+            security_severity,
+            quality_severity,
             llm_findings,
             audit_findings,
-            style_findings,
+            bandit_findings,
             taint_findings,
+            style_findings,
+            ruff_findings,
         )
         summary_artifacts = _write_summary_artifacts(summary_text, opts.summary_path)
         artifacts.update(summary_artifacts)

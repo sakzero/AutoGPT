@@ -121,16 +121,16 @@ def _analyze_maintainability(code: str, rel_path: str) -> List[StyleIssue]:
 
 
 def _complexity_severity(score: float) -> Optional[str]:
-    if score >= 20:
-        return "high"
-    if score >= 10:
+    if score >= 30:
         return "medium"
+    if score >= 20:
+        return "low"
     return None
 
 
 def _maintainability_severity(score: float) -> Optional[str]:
     if score < 50:
-        return "high"
-    if score < 70:
         return "medium"
+    if score < 70:
+        return "low"
     return None

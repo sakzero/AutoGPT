@@ -28,5 +28,11 @@ class Config:
     LLM_MAX_SNAPSHOT_CHUNKS = int(os.getenv("LLM_MAX_SNAPSHOT_CHUNKS", "4"))
     HEURISTIC_SCAN_CONTEXT = os.getenv("HEURISTIC_SCAN_CONTEXT", "0") not in {"0", "false", "False", ""}
 
+    # Quality Tooling
+    RUFF_ISOLATED = os.getenv("RUFF_ISOLATED", "1") not in {"0", "false", "False", ""}
+    RUFF_SELECT = (os.getenv("RUFF_SELECT") or "F,E9,B").strip()
+    BANDIT_SKIP = (os.getenv("BANDIT_SKIP") or "B101").strip()
+    BANDIT_EXCLUDE = (os.getenv("BANDIT_EXCLUDE") or "").strip()
+
     # App Settings
     IGNORED_FILES = {"audit.py", "exploit_generated.py", "init_db.py", "setup.py"}

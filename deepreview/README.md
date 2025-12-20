@@ -26,6 +26,11 @@ uv run python -m deepreview.cli path/to/project \
 | `NVIDIA_API_KEY` | ✅ | NVIDIA AI Foundation / 微软 Azure AI Studio 等兼容 endpoint 的 API 密钥，用于驱动 LLM 审计。 |
 | `MODEL_NAME` | 可选 | 默认 `qwen/qwen3-coder-480b-a35b-instruct`，可切换为你在集成平台上允许调用的模型标识。 |
 | `NVIDIA_BASE_URL` | 可选 | 默认为 `https://integrate.api.nvidia.com/v1`，若使用私有代理/企业内网部署可覆盖。 |
+| `RUFF_ISOLATED` | 可选 | 默认 `1`，以审计视角运行 ruff（忽略目标仓库自身的 ruff 配置，避免“规则爆炸”）。 |
+| `RUFF_SELECT` | 可选 | 默认 `F,E9,B`，聚焦语法/明显 bug；如需更严格可自行扩展。 |
+| `BANDIT_SKIP` | 可选 | 默认 `B101`（跳过 assert 规则，通常噪声极大）；如需启用可置空或覆盖。 |
+| `BANDIT_EXCLUDE` | 可选 | 传给 bandit 的 `-x` 排除路径（逗号分隔）。 |
+| `ARCHIVE_INCLUDE_WORKSPACE` | 可选 | 默认 `0`；`--archive-run` 打包时是否包含整份 `workspace/`（开启会显著变大）。 |
 | 其他 | 可选 | `LLM_DIFF_CHUNK_CHARS`、`LLM_DIFF_MAX_SECTIONS`、`HEURISTIC_SCAN_CONTEXT` 等配置可在 CI 中精调。 |
 
 在 GitHub Actions 中，需要针对仓库（或组织）依次添加 Secrets：`NVIDIA_API_KEY`（必填），如需自定义模型或私有基座，再补充 `MODEL_NAME`、`NVIDIA_BASE_URL`。workflow 已将这些变量注入 `uv run` 步骤，无需额外导出。
@@ -91,14 +96,14 @@ jobs:
 
 ## 复现脚本与调试
 
-- 污点分析命中高危链路时会在 `deepreview_runs/<run>/repro_attempts/` 生成最小复现脚本并执行，stdout/stderr 写入 `deepreview_report.json -> reproduction`
+- 污点分析命中高危链路时会在 `deepreview_runs/<run>/repro_attempts/` 生成最小上下文脚本（仅抽取命中位置附近的代码片段）并执行，stdout/stderr 写入 `deepreview_report.json -> reproduction`
 - SARIF `properties.reproduction_summary`、run metadata 与 artifacts 可帮助安全团队快速定位可复现风险
 - 下载 `deepreview_runs/` 后即可在本地重跑脚本，复现漏洞细节
 
 ## 主要特性
 
 - **LLM 结构化审计**：diff 自动按文件/片段分片，控制在 NVIDIA 25 MB payload 限制内；summary/insights/findings 严格输出 JSON，scan-mode 控制数量
-- **上下文增强**：Tree-sitter 索引 + diff/snapshot，`--changed-files` 支持增量索引与上下文检索
+- **上下文增强**：diff 模式使用 Tree-sitter 索引做增量上下文检索；snapshot 模式会先跑静态工具，再把 top findings + snippet 交给 LLM 做归纳（避免把整仓库源码塞进 LLM）
 - **静态信号**：启发式只聚焦真实 diff 内容（可按需开启 context 扫描），再结合污点、Radon 风格、ruff/bandit
 - **复现脚本**：对高危污点链生成/运行脚本，辅助 CI 审计闭环
 - **配置驱动**：`--config` + YAML 多目标执行，`--init-config` 一键生成模版

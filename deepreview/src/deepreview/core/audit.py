@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,35 @@ class HeuristicAuditor:
         if self.scan_context and context_text:
             findings.extend(self._scan_plain(context_text, source="context", seen=seen))
         return findings
+
+    def run_workspace(
+        self,
+        workspace_path: str,
+        include_paths: Sequence[str] | None = None,
+    ) -> List[Dict[str, Optional[str]]]:
+        root = Path(workspace_path).resolve()
+        include_set = {p.replace("\\", "/").strip() for p in include_paths or [] if p.strip()}
+        findings: List[Dict[str, Optional[str]]] = []
+        seen: set[tuple[str, str | None, int | None]] = set()
+        for file_path in self._iter_python_files(root):
+            rel_path = file_path.relative_to(root).as_posix()
+            if include_set and rel_path not in include_set:
+                continue
+            try:
+                lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except OSError:
+                continue
+            for idx, line in enumerate(lines, start=1):
+                findings.extend(self._match_rules(line, rel_path, idx, seen))
+        return findings
+
+    def _iter_python_files(self, root: Path):
+        ignored_dirs = {".git", ".venv", "venv", "__pycache__", ".tox", ".pytest_cache", "deepreview_runs", "artifacts"}
+        for current_root, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in ignored_dirs and not d.startswith(".")]
+            for file_name in files:
+                if file_name.endswith(".py"):
+                    yield Path(current_root, file_name)
 
     def _scan_diff(self, diff_text: str, seen: set[tuple[str, str | None, int | None]]) -> List[Dict[str, Optional[str]]]:
         findings: List[Dict[str, Optional[str]]] = []

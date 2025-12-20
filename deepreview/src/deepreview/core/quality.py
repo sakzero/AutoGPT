@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+from ..config import Config
+
 RUFF_SEVERITY_BY_PREFIX = {
     "e": "low",
     "f": "low",
@@ -39,6 +41,11 @@ def run_ruff(
 ) -> List[Dict[str, str]]:
     targets = _normalize_targets(target_path, include_paths)
     cmd = ["ruff", "check", "--exit-zero", "--output-format", "json"]
+    if getattr(Config, "RUFF_ISOLATED", False):
+        cmd.append("--isolated")
+    select = (getattr(Config, "RUFF_SELECT", "") or "").strip()
+    if select:
+        cmd.extend(["--select", select])
     cmd.extend(targets if targets else [target_path])
     output = _run_command(cmd, cwd=target_path)
     if not output:
@@ -72,6 +79,12 @@ def run_bandit(
 ) -> List[Dict[str, str]]:
     targets = _normalize_targets(target_path, include_paths)
     cmd = ["bandit", "-f", "json", "-q", "--exit-zero"]
+    skip = (getattr(Config, "BANDIT_SKIP", "") or "").strip()
+    if skip:
+        cmd.extend(["-s", skip])
+    exclude = (getattr(Config, "BANDIT_EXCLUDE", "") or "").strip()
+    if exclude:
+        cmd.extend(["-x", exclude])
     if targets:
         cmd.extend(targets)
     else:
